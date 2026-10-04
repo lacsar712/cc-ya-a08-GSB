@@ -5,9 +5,8 @@ import time
 from datetime import datetime, timezone
 
 import psycopg
-from psycopg.rows import dict_row
 
-from db import SCHEMA, connect
+from db import SCHEMA, COLUMN_MIGRATIONS, connect
 from rules import judge
 
 POLL_SEC = float(os.environ.get("WORKER_POLL_SEC", "0.5"))
@@ -16,6 +15,8 @@ IDLE_SEC = float(os.environ.get("WORKER_IDLE_SEC", "1.0"))
 
 def ensure_schema(conn):
     conn.execute(SCHEMA)
+    for stmt in COLUMN_MIGRATIONS:
+        conn.execute(stmt)
     conn.commit()
 
 
@@ -38,6 +39,13 @@ def claim_and_process(conn) -> bool:
                SET status = 'done', verdict = %s, reason = %s, processed_at = %s
                WHERE id = %s""",
             (verdict, reason, now, row["id"]),
+        )
+        # 判定结论同步回写换算流水，保持「先换算、再判定」的链路完整
+        conn.execute(
+            """UPDATE conversion_entries
+               SET verdict = %s, reason = %s
+               WHERE log_id = %s""",
+            (verdict, reason, row["id"]),
         )
     return True
 
